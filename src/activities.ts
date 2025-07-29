@@ -104,9 +104,9 @@ export async function cloneRepository(input: z.infer<typeof CloneRepositoryInput
 }
 
 export async function runClaudeCode(
-  input: z.infer<typeof RunClaudeCodeInput> & { sessionId?: string; feedback?: string }
+  input: z.infer<typeof RunClaudeCodeInput>
 ) {
-  const { repoPath, sessionId, feedback } = input;
+  const { repoPath } = input;
 
   try {
     console.log('Running Claude Code SDK in:', repoPath);
@@ -115,20 +115,14 @@ export async function runClaudeCode(
     const messages: SDKMessage[] = [];
     let summary = '';
 
-    // Prepare the prompt
-    const finalPrompt = feedback
-      ? `The previous integration attempt was rejected with this feedback: "${feedback}"\n\nPlease address this feedback and make the necessary adjustments.`
-      : HELICONE_INTEGRATION_PROMPT;
-
-    // Use the Claude Code SDK
+    // Use the Claude Code SDK for initial integration
     for await (const message of query({
-      prompt: finalPrompt,
+      prompt: HELICONE_INTEGRATION_PROMPT,
       options: {
         cwd: repoPath,
         maxTurns: 20,
         allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'LS'],
         pathToClaudeCodeExecutable: require.resolve('@anthropic-ai/claude-code/cli.js'),
-        resume: sessionId,
       },
     })) {
       // Log messages based on type
@@ -167,6 +161,80 @@ export async function runClaudeCode(
   } catch (error) {
     console.error('Error running Claude Code:', error);
     throw new ClaudeCodeError(`Claude Code execution failed: ${getErrorMessage(error)}`, error as Error);
+  }
+}
+
+// New activity specifically for applying feedback
+export async function applyClaudeCodeFeedback(
+  input: { repoPath: string; sessionId: string; feedback: string; branchName: string }
+) {
+  const { repoPath, sessionId, feedback, branchName } = input;
+
+  try {
+    console.log('Applying feedback with Claude Code');
+    console.log('Session ID:', sessionId);
+    console.log('Feedback:', feedback);
+    console.log('Branch:', branchName);
+
+    // First, ensure we're on the right branch
+    execSync(`cd ${repoPath} && git checkout ${branchName}`, {
+      stdio: 'inherit',
+    });
+
+    const messages: SDKMessage[] = [];
+    let summary = '';
+
+    // Resume the session with feedback
+    for await (const message of query({
+      prompt: `The previous integration attempt was rejected with this feedback: "${feedback}"\n\nPlease address this feedback and make the necessary adjustments.`,
+      options: {
+        cwd: repoPath,
+        maxTurns: 20,
+        allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'LS'],
+        pathToClaudeCodeExecutable: require.resolve('@anthropic-ai/claude-code/cli.js'),
+        resume: sessionId,
+      },
+    })) {
+      if (message.type === 'assistant' && 'message' in message) {
+        const content = typeof message.message === 'string' ? message.message : JSON.stringify(message.message);
+        console.log('[Claude]:', content);
+        summary += content + '\n';
+      }
+    }
+
+    // Check for changes
+    const { stdout: gitStatus } = await execAsync('git status --porcelain', { cwd: repoPath });
+    if (!gitStatus.trim()) {
+      console.log('No changes made after applying feedback');
+      return {
+        success: false,
+        summary: 'No changes were made in response to the feedback',
+      };
+    }
+
+    // Stage and commit the changes
+    execSync(`cd ${repoPath} && git add -A`, { stdio: 'inherit' });
+    execSync(`cd ${repoPath} && git commit -m "Apply review feedback: ${feedback.substring(0, 50)}..." --no-verify`, {
+      stdio: 'inherit',
+    });
+
+    // Push to update the existing PR
+    execSync(`cd ${repoPath} && git push origin ${branchName}`, {
+      stdio: 'inherit',
+    });
+
+    // Get file changes
+    const { modifiedFiles, addedFiles } = await getGitChanges(repoPath);
+    const changesSummary = formatChangesSummary(modifiedFiles, addedFiles);
+
+    return {
+      success: true,
+      summary: summary.trim() || 'Successfully applied feedback',
+      changesSummary,
+    };
+  } catch (error) {
+    console.error('Error applying feedback:', error);
+    throw new ClaudeCodeError(`Failed to apply feedback: ${getErrorMessage(error)}`, error as Error);
   }
 }
 

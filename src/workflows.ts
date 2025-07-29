@@ -12,14 +12,14 @@ const defaultActivities = proxyActivities<typeof activities>({
 });
 
 // Override specific activities that need different settings
-const runClaudeCode = proxyActivities<Pick<typeof activities, 'runClaudeCode'>>({
+const { runClaudeCode, applyClaudeCodeFeedback } = proxyActivities<Pick<typeof activities, 'runClaudeCode' | 'applyClaudeCodeFeedback'>>({
   startToCloseTimeout: '20 minutes',
   retry: {
     initialInterval: '30s',
     maximumInterval: '5m',
     maximumAttempts: 2,
   },
-}).runClaudeCode;
+});
 
 // Use default timeout for other activities
 const { forkRepository, cloneRepository, createStagingBranch, createPullRequest, updateIntegrationStatus } = defaultActivities;
@@ -114,50 +114,37 @@ async function performIntegration(
   forkInfo: ForkResult,
   getReviewDecision: () => ReviewDecision | undefined
 ): Promise<{ branchName: string; attemptCount: number; claudeSessionId?: string } | null> {
+  // Step 1: Initial integration
+  const claudeResult = await runClaudeIntegration(input, repoPath);
+  
+  if (!claudeResult) {
+    return null; // No changes needed
+  }
+
+  const branchName = `helicone-integration-${input.integrationId}`;
+  const sessionId = claudeResult.sessionId;
+
+  // Create staging branch and PR for review
+  await createReviewPullRequest(
+    input,
+    repoPath,
+    claudeResult,
+    branchName,
+    1,
+    undefined,
+    forkInfo
+  );
+
+  // Step 2: Review loop
+  let attemptCount = 1;
   let integrationComplete = false;
-  let attemptCount = 0;
-  let claudeSessionId: string | undefined;
-  let currentBranchName = '';
-  let reviewDecision = getReviewDecision();
 
   while (!integrationComplete && attemptCount < 3) {
-    attemptCount++;
-
-    // Run Claude Code
-    const claudeResult = await runClaudeIntegration(
-      input,
-      repoPath,
-      claudeSessionId,
-      attemptCount,
-      reviewDecision
-    );
-
-    if (!claudeResult) {
-      return null; // No changes needed
-    }
-
-    claudeSessionId = claudeResult.sessionId;
-
-    // Create staging branch and PR for review
-    currentBranchName = `helicone-integration-${input.integrationId}-v${attemptCount}`;
-    await createReviewPullRequest(
-      input,
-      repoPath,
-      claudeResult,
-      currentBranchName,
-      attemptCount,
-      reviewDecision,
-      forkInfo
-    );
-
-    // Wait for review
-    const newReviewDecision = await waitForReview(input);
+    const reviewDecision = await waitForReview(input);
     
-    if (!newReviewDecision) {
+    if (!reviewDecision) {
       return null; // Timeout
     }
-
-    reviewDecision = newReviewDecision;
 
     if (reviewDecision.approved) {
       integrationComplete = true;
@@ -168,44 +155,66 @@ async function performIntegration(
         message: 'Changes rejected without feedback',
       });
       return null;
+    } else {
+      // Apply feedback to the existing PR
+      attemptCount++;
+      
+      await updateIntegrationStatus({
+        integrationId: input.integrationId,
+        status: 'applying_feedback',
+        message: `Applying feedback (attempt ${attemptCount})...`,
+      });
+
+      const feedbackResult = await applyClaudeCodeFeedback({
+        repoPath,
+        sessionId: sessionId!,
+        feedback: reviewDecision.feedback,
+        branchName,
+      });
+
+      if (!feedbackResult.success) {
+        await updateIntegrationStatus({
+          integrationId: input.integrationId,
+          status: 'failed',
+          message: 'Failed to apply feedback: ' + feedbackResult.summary,
+        });
+        return null;
+      }
+
+      await updateIntegrationStatus({
+        integrationId: input.integrationId,
+        status: 'awaiting_review',
+        message: 'Feedback applied. Awaiting re-review...',
+      });
     }
-    // Otherwise, continue loop with feedback
   }
 
   if (!integrationComplete) {
     await updateIntegrationStatus({
       integrationId: input.integrationId,
       status: 'rejected',
-      message: 'Maximum retry attempts reached',
+      message: 'Maximum feedback attempts reached',
     });
     return null;
   }
 
-  return { branchName: currentBranchName, attemptCount, claudeSessionId };
+  return { branchName, attemptCount, claudeSessionId: sessionId };
 }
 
 async function runClaudeIntegration(
   input: RepositoryIntegrationInput,
-  repoPath: string,
-  sessionId: string | undefined,
-  attemptCount: number,
-  reviewDecision: ReviewDecision | undefined
+  repoPath: string
 ) {
   await updateIntegrationStatus({
     integrationId: input.integrationId,
     status: 'integrating',
-    message:
-      attemptCount > 1
-        ? `Re-running Claude Code with feedback (attempt ${attemptCount})...`
-        : 'Running Claude Code to add Helicone integration...',
+    message: 'Running Claude Code to add Helicone integration...',
   });
 
   const claudeResult = await runClaudeCode({
     repoPath,
     analysis: {},
     task: 'Add Helicone integration',
-    sessionId,
-    feedback: attemptCount > 1 && reviewDecision ? reviewDecision.feedback : undefined,
   });
 
   // Check if Claude Code made any changes
@@ -259,8 +268,8 @@ async function createReviewPullRequest(
     repo: forkInfo.forkName,
     head: branchName,
     base: forkInfo.defaultBranch,
-    title: `[REVIEW] Add Helicone observability integration${attemptCount > 1 ? ` (v${attemptCount})` : ''}`,
-    body: formatReviewPRBody(input, claudeResult, attemptCount, reviewDecision),
+    title: `[REVIEW] Add Helicone observability integration`,
+    body: formatReviewPRBody(input, claudeResult),
   });
 
   await updateIntegrationStatus({
@@ -328,24 +337,13 @@ async function createFinalPullRequest(
 
 function formatReviewPRBody(
   input: RepositoryIntegrationInput,
-  claudeResult: any,
-  attemptCount: number,
-  reviewDecision?: ReviewDecision
+  claudeResult: any
 ): string {
-  let body = `## 🔍 Review Required
+  return `## 🔍 Review Required
 
 This PR adds Helicone observability to track and monitor LLM usage.
 
-`;
-
-  if (attemptCount > 1 && reviewDecision?.feedback) {
-    body += `### Revision ${attemptCount}
-This revision addresses the feedback: "${reviewDecision.feedback}"
-
-`;
-  }
-
-  body += `${claudeResult.summary}
+${claudeResult.summary}
 
 ## Changes
 
@@ -360,8 +358,6 @@ ${claudeResult.changesSummary}
 ---
 
 *This PR was generated with [Helicone Temporal Integration](https://github.com/Helicone/helicone)*`;
-
-  return body;
 }
 
 function formatFinalPRBody(attemptCount: number, sessionId?: string): string {
