@@ -31,9 +31,13 @@ npm start.watch
 npm run workflow
 ```
 
-### Test
+### Review Workflows
 ```bash
-npm test  # Run all tests with Mocha
+# Approve changes
+npm run review <workflow-id> approve
+
+# Reject with feedback
+npm run review <workflow-id> reject "feedback here"
 ```
 
 ### Code Quality
@@ -45,6 +49,17 @@ npm run format:check # Check formatting
 
 ## Architecture
 
+### Project Structure
+- `/src` - TypeScript source files
+  - `worker.ts` - Temporal worker that executes workflows and activities
+  - `client.ts` - CLI client to start workflows
+  - `workflows.ts` - Temporal workflow definitions (simplified with helper functions)
+  - `activities.ts` - Temporal activities (GitHub, Claude Code, Git operations)
+  - `review.ts` - CLI tool for sending review signals to workflows
+  - `constants.ts` - Shared constants including Claude Code prompt
+  - `/utils` - Utility functions
+    - `errors.ts` - Standardized error handling classes
+
 ### Workflow Pattern
 The system follows Temporal's workflow/activity separation:
 - **Workflows** (`src/workflows.ts`): Orchestration logic, must be deterministic
@@ -54,8 +69,17 @@ The system follows Temporal's workflow/activity separation:
 
 ### Key Integration Flow
 1. `repositoryIntegrationWorkflow` orchestrates the entire process
-2. Activities handle GitHub operations, file system operations, and Claude Code execution
-3. Claude Code SDK is used with specific permissions to modify codebases
+2. Fork repository and clone it locally
+3. Run Claude Code to add Helicone integration (with retry/feedback loop)
+4. Create review PR in fork for human approval
+5. Upon approval, create final PR to original repository
+6. Activities handle GitHub operations, file system operations, and Claude Code execution
+7. Claude Code SDK is used with specific permissions to modify codebases
+
+### Error Handling
+- Custom error types in `utils/errors.ts` for different failure scenarios
+- Consistent error messages across activities
+- Proper cleanup and status updates on failure
 
 ### Important Constraints
 - Workflow code cannot import Node.js built-ins (except 'assert')
