@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  temporal:
+    image: temporalio/auto-setup:latest
+    ports:
+      - "7233:7233"
+      - "8233:8233"
+    environment:
+      - TEMPORAL_BROADCAST_ADDRESS=0.0.0.0
+      - TEMPORAL_HISTORY_PERSISTENCE_DRIVER=memory
+      - TEMPORAL_VISIBILITY_PERSISTENCE_DRIVER=memory
+    networks:
+      - temporal-network
+
+  temporal-worker:
+    build: .
+    depends_on:
+      - temporal
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - ./src:/app/src:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - temporal-network
+    restart: unless-stopped
+
+networks:
+  temporal-network:
+    driver: bridge
