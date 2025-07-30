@@ -1,5 +1,10 @@
-import { Connection, Client } from '@temporalio/client';
+import { Client } from '@temporalio/client';
 import { reviewChangesSignal } from './workflows';
+import * as dotenv from 'dotenv';
+import { createClientConnection, getNamespace } from './utils/temporal-connection';
+
+// Load environment variables
+dotenv.config();
 
 async function sendReview() {
   const args = process.argv.slice(2);
@@ -15,12 +20,12 @@ async function sendReview() {
   const feedback = feedbackParts.join(' ');
   const approved = decision.toLowerCase() === 'approve';
 
-  // Connect to the Temporal server
-  const connection = await Connection.connect({ address: 'localhost:7233' });
+  const connection = await createClientConnection();
+  const namespace = getNamespace();
   
   const client = new Client({
     connection,
-    namespace: 'default',
+    namespace,
   });
 
   try {

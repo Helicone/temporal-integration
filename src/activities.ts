@@ -113,7 +113,6 @@ export async function runClaudeCode(
     console.log('With ANTHROPIC_API_KEY:', process.env.ANTHROPIC_API_KEY ? 'Set' : 'Not set');
 
     const messages: SDKMessage[] = [];
-    let summary = '';
 
     // Use the Claude Code SDK for initial integration
     for await (const message of query({
@@ -125,31 +124,69 @@ export async function runClaudeCode(
         pathToClaudeCodeExecutable: require.resolve('@anthropic-ai/claude-code/cli.js'),
       },
     })) {
-      // Log messages based on type
+      messages.push(message);
+    }
+
+    console.log('Claude Code SDK completed successfully');
+    
+    // Process messages to extract summary and tool usage
+    let summary = '';
+    let detailedLog = '';
+    
+    for (const message of messages) {
       if (message.type === 'assistant' && 'message' in message) {
-        // Extract only text content from assistant messages
-        if (typeof message.message === 'string') {
-          console.log('[Claude]:', message.message);
-          summary += message.message + '\n';
-        } else if (message.message && typeof message.message === 'object' && 'content' in message.message) {
-          // Handle structured messages with content array
-          const msg = message.message as any;
-          if (Array.isArray(msg.content)) {
+        const msg = message.message as any;
+        
+        // Check if the message is a string that looks like JSON
+        if (typeof msg === 'string') {
+          // Try to parse if it looks like JSON
+          if (msg.trim().startsWith('{')) {
+            try {
+              const parsed = JSON.parse(msg);
+              // Extract text content from parsed JSON
+              if (parsed.content && Array.isArray(parsed.content)) {
+                for (const content of parsed.content) {
+                  if (content.type === 'text' && content.text) {
+                    console.log('[Claude]:', content.text);
+                    summary += content.text + '\n';
+                  } else if (content.type === 'tool_use') {
+                    const toolName = content.name || 'Unknown';
+                    detailedLog += `- Used tool: ${toolName}\n`;
+                    if (content.input?.file_path) {
+                      detailedLog += `  - File: ${content.input.file_path}\n`;
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              // Not JSON or failed to parse, use as plain text
+              console.log('[Claude]:', msg);
+              summary += msg + '\n';
+            }
+          } else {
+            // Plain text message
+            console.log('[Claude]:', msg);
+            summary += msg + '\n';
+          }
+        } else if (msg && typeof msg === 'object') {
+          // Already an object
+          if (msg.content && Array.isArray(msg.content)) {
             for (const content of msg.content) {
               if (content.type === 'text' && content.text) {
                 console.log('[Claude]:', content.text);
                 summary += content.text + '\n';
+              } else if (content.type === 'tool_use') {
+                const toolName = content.name || 'Unknown';
+                detailedLog += `- Used tool: ${toolName}\n`;
+                if (content.input?.file_path) {
+                  detailedLog += `  - File: ${content.input.file_path}\n`;
+                }
               }
             }
           }
         }
-      } else if (message.type === 'result' && 'session_id' in message) {
-        // Capture session ID from result
-        messages.push(message);
       }
     }
-
-    console.log('Claude Code SDK completed successfully');
 
     // Extract session ID from result message
     const resultMessage = messages.find((m) => m.type === 'result' && 'session_id' in m) as any;
@@ -161,27 +198,6 @@ export async function runClaudeCode(
     // Create a formatted changes summary
     const changesSummary = formatChangesSummary(modifiedFiles, addedFiles);
 
-    // Try to extract commit message if Claude Code made one
-    let suggestedPRTitle = 'Add Helicone observability integration';
-    try {
-      // First check if there are uncommitted changes
-      const { stdout: statusCheck } = await execAsync('git status --porcelain', { cwd: repoPath });
-      
-      if (!statusCheck.trim()) {
-        // No uncommitted changes, so Claude Code must have committed
-        const { stdout: lastCommit } = await execAsync('git log -1 --pretty=format:%s', { cwd: repoPath });
-        if (lastCommit) {
-          console.log('Found Claude Code commit:', lastCommit);
-          suggestedPRTitle = lastCommit.trim();
-        }
-      } else {
-        console.log('Claude Code did not commit changes');
-      }
-    } catch (e) {
-      console.log('Error checking for commit:', e);
-      // Couldn't get commit message, use default
-    }
-
     return {
       success: true,
       changes: {
@@ -191,7 +207,7 @@ export async function runClaudeCode(
       summary: summary.trim() || 'Successfully integrated Helicone observability into the project',
       changesSummary,
       sessionId: claudeSessionId,
-      suggestedPRTitle,
+      detailedLog: detailedLog.trim(),
     };
   } catch (error) {
     console.error('Error running Claude Code:', error);
@@ -216,7 +232,6 @@ export async function applyClaudeCodeFeedback(
       stdio: 'inherit',
     });
 
-    const messages: SDKMessage[] = [];
     let summary = '';
 
     // Resume the session with feedback
@@ -231,19 +246,20 @@ export async function applyClaudeCodeFeedback(
       },
     })) {
       if (message.type === 'assistant' && 'message' in message) {
-        // Extract only text content from assistant messages
-        if (typeof message.message === 'string') {
-          console.log('[Claude]:', message.message);
-          summary += message.message + '\n';
-        } else if (message.message && typeof message.message === 'object' && 'content' in message.message) {
-          // Handle structured messages with content array
-          const msg = message.message as any;
-          if (Array.isArray(msg.content)) {
-            for (const content of msg.content) {
-              if (content.type === 'text' && content.text) {
-                console.log('[Claude]:', content.text);
-                summary += content.text + '\n';
-              }
+        const assistantMsg = message.message as any;
+        
+        // Handle different message formats
+        if (typeof assistantMsg === 'string') {
+          console.log('[Claude]:', assistantMsg);
+          summary += assistantMsg + '\n';
+        } else if (assistantMsg?.content) {
+          // Extract text from content array
+          const contents = Array.isArray(assistantMsg.content) ? assistantMsg.content : [assistantMsg.content];
+          
+          for (const content of contents) {
+            if (content.type === 'text' && content.text) {
+              console.log('[Claude]:', content.text);
+              summary += content.text + '\n';
             }
           }
         }

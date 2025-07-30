@@ -75,3 +75,12 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Certificates (NEVER commit these!)
+certificates/
+!certificates/README.md
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx

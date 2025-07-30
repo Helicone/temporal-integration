@@ -1,0 +1,32 @@
+# fly.toml app configuration file
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+
+app = "helicone-temporal-worker"
+primary_region = "sjc"  # San Jose, change to your preferred region
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  # We'll set the sensitive env vars as secrets
+
+[experimental]
+  auto_rollback = true
+
+# No services exposed - this is a worker, not a web server
+# services = []
+
+# Machines configuration for workers
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[deploy]
+  strategy = "immediate"
+
+# No health checks needed for workers
+# Workers are long-running processes
+  
+[processes]
+  worker = "npm start"

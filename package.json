@@ -9,10 +9,13 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
-    "start": "ts-node src/worker.ts",
+    "start": "node lib/worker.js",
+    "start:dev": "ts-node src/worker.ts",
     "start.watch": "nodemon src/worker.ts",
-    "workflow": "ts-node src/client.ts",
-    "review": "ts-node src/review.ts"
+    "workflow": "node lib/client.js",
+    "workflow:dev": "ts-node src/client.ts",
+    "review": "node lib/review.js",
+    "review:dev": "ts-node src/review.ts"
   },
   "nodemonConfig": {
     "execMap": {

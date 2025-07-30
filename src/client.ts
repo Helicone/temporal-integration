@@ -1,6 +1,11 @@
-import { Connection, Client } from '@temporalio/client';
+import { Client } from '@temporalio/client';
 import { repositoryIntegrationWorkflow } from './workflows';
 import { nanoid } from 'nanoid';
+import * as dotenv from 'dotenv';
+import { createClientConnection, getNamespace } from './utils/temporal-connection';
+
+// Load environment variables
+dotenv.config();
 
 async function run() {
   // Get GitHub URL from command line arguments
@@ -33,12 +38,12 @@ async function run() {
   console.log(JSON.stringify(workflowInput, null, 2));
   console.log('\n');
 
-  // Connect to the Temporal server
-  const connection = await Connection.connect({ address: 'localhost:7233' });
+  const connection = await createClientConnection();
+  const namespace = getNamespace();
   
   const client = new Client({
     connection,
-    namespace: 'default',
+    namespace,
   });
 
   const handle = await client.workflow.start(repositoryIntegrationWorkflow, {
@@ -48,6 +53,7 @@ async function run() {
   });
 
   console.log(`Started workflow ${handle.workflowId}`);
+  console.log(`Namespace: ${namespace}`);
   
   // Get the result of the Workflow execution
   const result = await handle.result();

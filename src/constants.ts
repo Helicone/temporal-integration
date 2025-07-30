@@ -26,39 +26,41 @@ Helicone is a proxy-based observability platform for LLMs. It requires NO new pa
      * Testing requirements
      * Documentation requirements
 
-2. Find where LLM clients are initialized in the codebase:
+2. Research Helicone documentation for the latest integration methods:
+   - Check https://docs.helicone.ai for the most up-to-date integration patterns
+   - Look for language/framework-specific guides
+   - Verify the current proxy endpoints and configuration options
+   - Check for any new features or best practices
+
+3. Find where LLM clients are initialized in the codebase:
    - Look for OpenAI, Anthropic, Azure OpenAI, or other LLM client instantiations
    - Common patterns: "new OpenAI(", "new Anthropic(", "new AzureOpenAI(", etc.
+   - Ensure you find all of them, search deep in the codebase
 
-3. Update ONLY the client initialization to use Helicone's proxy:
+4. Update ONLY the client initialization to use Helicone's proxy:
    - Change/add baseURL to Helicone's proxy endpoint
    - Add Helicone-Auth header with API key
    - Make NO other changes to the initialization
    - Follow the project's code style EXACTLY (spacing, quotes, semicolons, etc.)
 
-4. Environment variables:
+5. Environment variables:
    - Check how the project handles env variables (e.g., .env, config files, etc.)
    - Follow their existing pattern for adding new environment variables
    - If .env.example exists and has HELICONE_API_KEY, do nothing
    - If .env.example exists without HELICONE_API_KEY, add it following their format
-   - If no .env.example exists, check if they use another pattern before creating one
+   - If no .env.example exists, check if they use another pattern, if not, do nothing
 
-5. Testing:
+6. Testing:
    - If the project has tests for the LLM integration, update them to work with Helicone
    - Don't break existing tests
    - If they require tests for new features, add minimal tests for the Helicone integration
 
-6. Commit and PR preparation:
-   - Study recent commits with git log to understand their commit message format
-   - Follow their exact commit message style (conventional commits, length, format)
-   - IMPORTANT: Create a git commit with your changes following their conventions
-   - Your commit message should blend in perfectly with their commit history
-   - Examples of good commit messages based on project style:
-     * Conventional: "feat: add Helicone observability integration"
-     * Angular: "feat(monitoring): integrate Helicone for LLM observability"
-     * Simple: "Add Helicone integration for LLM monitoring"
-   - Branch naming: check existing branches to follow their pattern
-   - If they have specific PR requirements, prepare notes about how this PR meets them
+7. Study project conventions (for PR preparation):
+   - Check recent commits with git log to understand their style
+   - Look for PR requirements in contribution guidelines
+   - Note if they use conventional commits, specific prefixes, etc.
+   - Check if they require DCO sign-offs or other special requirements
+   - This information helps ensure the PR will be accepted
 
 CRITICAL: Your PR will be rejected if you don't follow their contribution guidelines!
 Before making ANY changes:
@@ -133,23 +135,7 @@ const client = new AzureOpenAI({
   },
 });
 \`\`\`
-</examples>
-
-<documentation>
-Helicone Proxy Endpoints:
-- OpenAI: https://oai.helicone.ai/v1
-- Anthropic: https://anthropic.helicone.ai
-- Azure: https://oai.helicone.ai/openai/deployments/[deployment-name]
-
-Full docs: https://docs.helicone.ai/getting-started/quick-start
-</documentation>
-
-Remember: 
-- Make MINIMAL changes - only what's absolutely necessary
-- Do NOT refactor or reorganize existing code
-- Match existing code style exactly
-- No emojis, no extensive documentation
-- If the project already works, don't break it!`;
+</examples>`;
 
 export const DEFAULT_ACTIVITY_TIMEOUT = {
   startToCloseTimeout: '30 minutes',

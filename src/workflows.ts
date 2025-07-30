@@ -77,14 +77,14 @@ export async function repositoryIntegrationWorkflow(input: RepositoryIntegration
     );
 
     if (!integrationResult) {
-      // Workflow already updated status, just return
+      // No changes were needed, workflow completed successfully
       return;
     }
 
-    const { branchName, attemptCount, claudeSessionId, suggestedPRTitle } = integrationResult;
+    const { branchName, attemptCount, claudeSessionId } = integrationResult;
 
     // Step 3: Create final pull request to original repo
-    await createFinalPullRequest(input, forkInfo, branchName, attemptCount, claudeSessionId, suggestedPRTitle);
+    await createFinalPullRequest(input, forkInfo, branchName, attemptCount, claudeSessionId);
   } catch (error) {
     await updateIntegrationStatus({
       integrationId: input.integrationId,
@@ -129,7 +129,7 @@ async function performIntegration(
   forkInfo: ForkResult,
   getReviewDecision: () => ReviewDecision | undefined,
   resetReviewDecision: () => void,
-): Promise<{ branchName: string; attemptCount: number; claudeSessionId?: string; suggestedPRTitle?: string } | null> {
+): Promise<{ branchName: string; attemptCount: number; claudeSessionId?: string } | null> {
   // Step 1: Initial integration
   const claudeResult = await runClaudeIntegration(input, repoPath);
 
@@ -157,7 +157,7 @@ async function performIntegration(
 
     if (!reviewDecision) {
       console.log('[Workflow] Review timed out');
-      return null; // Timeout
+      throw new Error('Review timed out after waiting');
     }
 
     console.log('[Workflow] Review received:', reviewDecision);
@@ -198,7 +198,7 @@ async function performIntegration(
           status: 'failed',
           message: 'Failed to apply feedback: ' + feedbackResult.summary,
         });
-        return null;
+        throw new Error('Failed to apply feedback: ' + feedbackResult.summary);
       }
 
       console.log('[Workflow] Feedback applied successfully');
@@ -219,7 +219,7 @@ async function performIntegration(
     throw new Error('Maximum feedback attempts reached');
   }
 
-  return { branchName, attemptCount, claudeSessionId: sessionId, suggestedPRTitle: claudeResult.suggestedPRTitle };
+  return { branchName, attemptCount, claudeSessionId: sessionId };
 }
 
 async function runClaudeIntegration(input: RepositoryIntegrationInput, repoPath: string) {
@@ -285,7 +285,7 @@ async function createReviewPullRequest(
     repo: forkInfo.forkName,
     head: branchName,
     base: forkInfo.defaultBranch,
-    title: `[REVIEW] ${claudeResult.suggestedPRTitle || 'Add Helicone observability integration'}`,
+    title: `[REVIEW] Add Helicone observability integration`,
     body: formatReviewPRBody(input, claudeResult),
   });
 
@@ -326,7 +326,6 @@ async function createFinalPullRequest(
   branchName: string,
   attemptCount: number,
   sessionId?: string,
-  suggestedPRTitle?: string,
 ) {
   await updateIntegrationStatus({
     integrationId: input.integrationId,
@@ -339,7 +338,7 @@ async function createFinalPullRequest(
     repo: input.repoName,
     head: `${forkInfo.forkOwner}:${branchName}`,
     base: 'main',
-    title: suggestedPRTitle || 'Add Helicone observability integration',
+    title: 'Add Helicone observability integration',
     body: formatFinalPRBody(attemptCount, sessionId),
   });
 
@@ -354,20 +353,34 @@ async function createFinalPullRequest(
 // Helper functions
 
 function formatReviewPRBody(input: RepositoryIntegrationInput, claudeResult: any): string {
-  return `## 🔍 Review Required
+  let prBody = `## 🔍 Review Required
 
 This PR adds Helicone observability to track and monitor LLM usage.
 
-### Claude Code Summary
+### What Claude Code Did
 
 <details>
-<summary>Click to see what Claude Code did</summary>
+<summary>Summary of changes</summary>
 
 ${claudeResult.summary}
 
-</details>
+</details>`;
 
-## Changes Made
+  // Add detailed tool usage if available
+  if (claudeResult.detailedLog) {
+    prBody += `
+
+<details>
+<summary>Tools used during integration</summary>
+
+${claudeResult.detailedLog}
+
+</details>`;
+  }
+
+  prBody += `
+
+## Files Changed
 
 ${claudeResult.changesSummary}
 
@@ -384,6 +397,8 @@ ${claudeResult.changesSummary}
 ---
 
 *This PR was generated with [Helicone Temporal Integration](https://github.com/Helicone/helicone)*`;
+
+  return prBody;
 }
 
 function formatFinalPRBody(attemptCount: number, sessionId?: string): string {
