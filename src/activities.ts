@@ -127,9 +127,22 @@ export async function runClaudeCode(
     })) {
       // Log messages based on type
       if (message.type === 'assistant' && 'message' in message) {
-        const content = typeof message.message === 'string' ? message.message : JSON.stringify(message.message);
-        console.log('[Claude]:', content);
-        summary += content + '\n';
+        // Extract only text content from assistant messages
+        if (typeof message.message === 'string') {
+          console.log('[Claude]:', message.message);
+          summary += message.message + '\n';
+        } else if (message.message && typeof message.message === 'object' && 'content' in message.message) {
+          // Handle structured messages with content array
+          const msg = message.message as any;
+          if (Array.isArray(msg.content)) {
+            for (const content of msg.content) {
+              if (content.type === 'text' && content.text) {
+                console.log('[Claude]:', content.text);
+                summary += content.text + '\n';
+              }
+            }
+          }
+        }
       } else if (message.type === 'result' && 'session_id' in message) {
         // Capture session ID from result
         messages.push(message);
@@ -196,9 +209,22 @@ export async function applyClaudeCodeFeedback(
       },
     })) {
       if (message.type === 'assistant' && 'message' in message) {
-        const content = typeof message.message === 'string' ? message.message : JSON.stringify(message.message);
-        console.log('[Claude]:', content);
-        summary += content + '\n';
+        // Extract only text content from assistant messages
+        if (typeof message.message === 'string') {
+          console.log('[Claude]:', message.message);
+          summary += message.message + '\n';
+        } else if (message.message && typeof message.message === 'object' && 'content' in message.message) {
+          // Handle structured messages with content array
+          const msg = message.message as any;
+          if (Array.isArray(msg.content)) {
+            for (const content of msg.content) {
+              if (content.type === 'text' && content.text) {
+                console.log('[Claude]:', content.text);
+                summary += content.text + '\n';
+              }
+            }
+          }
+        }
       }
     }
 

@@ -12,7 +12,9 @@ const defaultActivities = proxyActivities<typeof activities>({
 });
 
 // Override specific activities that need different settings
-const { runClaudeCode, applyClaudeCodeFeedback } = proxyActivities<Pick<typeof activities, 'runClaudeCode' | 'applyClaudeCodeFeedback'>>({
+const { runClaudeCode, applyClaudeCodeFeedback } = proxyActivities<
+  Pick<typeof activities, 'runClaudeCode' | 'applyClaudeCodeFeedback'>
+>({
   startToCloseTimeout: '20 minutes',
   retry: {
     initialInterval: '30s',
@@ -22,7 +24,8 @@ const { runClaudeCode, applyClaudeCodeFeedback } = proxyActivities<Pick<typeof a
 });
 
 // Use default timeout for other activities
-const { forkRepository, cloneRepository, createStagingBranch, createPullRequest, updateIntegrationStatus } = defaultActivities;
+const { forkRepository, cloneRepository, createStagingBranch, createPullRequest, updateIntegrationStatus } =
+  defaultActivities;
 
 export interface RepositoryIntegrationInput {
   repoUrl: string;
@@ -49,8 +52,12 @@ export const reviewChangesSignal = defineSignal<[ReviewDecision]>('reviewChanges
 export async function repositoryIntegrationWorkflow(input: RepositoryIntegrationInput): Promise<void> {
   let reviewDecision: ReviewDecision | undefined;
 
-  // Set up signal handler for review
+  // Set up signal handler for review - this persists for the entire workflow
   setHandler(reviewChangesSignal, (decision: ReviewDecision) => {
+    console.log('[Workflow] Signal received:', JSON.stringify(decision));
+    console.log('[Workflow] Type of decision:', typeof decision);
+    console.log('[Workflow] Decision.approved:', decision.approved, 'Type:', typeof decision.approved);
+    console.log('[Workflow] Decision.feedback:', decision.feedback, 'Type:', typeof decision.feedback);
     reviewDecision = decision;
   });
 
@@ -59,17 +66,25 @@ export async function repositoryIntegrationWorkflow(input: RepositoryIntegration
     const { repoPath, forkInfo } = await setupRepository(input);
 
     // Step 2: Integration loop - allows retry with feedback
-    const integrationResult = await performIntegration(input, repoPath, forkInfo, () => reviewDecision);
-    
+    const integrationResult = await performIntegration(
+      input,
+      repoPath,
+      forkInfo,
+      () => reviewDecision,
+      () => {
+        reviewDecision = undefined;
+      }, // Reset function
+    );
+
     if (!integrationResult) {
-      return; // No changes needed or rejected
+      // Workflow already updated status, just return
+      return;
     }
 
     const { branchName, attemptCount, claudeSessionId } = integrationResult;
 
     // Step 3: Create final pull request to original repo
     await createFinalPullRequest(input, forkInfo, branchName, attemptCount, claudeSessionId);
-
   } catch (error) {
     await updateIntegrationStatus({
       integrationId: input.integrationId,
@@ -112,11 +127,12 @@ async function performIntegration(
   input: RepositoryIntegrationInput,
   repoPath: string,
   forkInfo: ForkResult,
-  getReviewDecision: () => ReviewDecision | undefined
+  getReviewDecision: () => ReviewDecision | undefined,
+  resetReviewDecision: () => void,
 ): Promise<{ branchName: string; attemptCount: number; claudeSessionId?: string } | null> {
   // Step 1: Initial integration
   const claudeResult = await runClaudeIntegration(input, repoPath);
-  
+
   if (!claudeResult) {
     return null; // No changes needed
   }
@@ -125,40 +141,43 @@ async function performIntegration(
   const sessionId = claudeResult.sessionId;
 
   // Create staging branch and PR for review
-  await createReviewPullRequest(
-    input,
-    repoPath,
-    claudeResult,
-    branchName,
-    1,
-    undefined,
-    forkInfo
-  );
+  await createReviewPullRequest(input, repoPath, claudeResult, branchName, 1, undefined, forkInfo);
 
   // Step 2: Review loop
   let attemptCount = 1;
   let integrationComplete = false;
 
   while (!integrationComplete && attemptCount < 3) {
-    const reviewDecision = await waitForReview(input);
-    
+    console.log(`[Workflow] Waiting for review (attempt ${attemptCount})...`);
+
+    // Reset any previous review decision before waiting for a new one
+    resetReviewDecision();
+
+    const reviewDecision = await waitForReview(input, getReviewDecision);
+
     if (!reviewDecision) {
+      console.log('[Workflow] Review timed out');
       return null; // Timeout
     }
 
+    console.log('[Workflow] Review received:', reviewDecision);
+
     if (reviewDecision.approved) {
+      console.log('[Workflow] Changes approved!');
       integrationComplete = true;
     } else if (!reviewDecision.feedback) {
+      console.log('[Workflow] Rejected without feedback');
       await updateIntegrationStatus({
         integrationId: input.integrationId,
         status: 'rejected',
         message: 'Changes rejected without feedback',
       });
-      return null;
+      throw new Error('Changes rejected without feedback');
     } else {
       // Apply feedback to the existing PR
       attemptCount++;
-      
+      console.log(`[Workflow] Applying feedback: "${reviewDecision.feedback}"`);
+
       await updateIntegrationStatus({
         integrationId: input.integrationId,
         status: 'applying_feedback',
@@ -173,6 +192,7 @@ async function performIntegration(
       });
 
       if (!feedbackResult.success) {
+        console.log('[Workflow] Failed to apply feedback:', feedbackResult.summary);
         await updateIntegrationStatus({
           integrationId: input.integrationId,
           status: 'failed',
@@ -181,6 +201,7 @@ async function performIntegration(
         return null;
       }
 
+      console.log('[Workflow] Feedback applied successfully');
       await updateIntegrationStatus({
         integrationId: input.integrationId,
         status: 'awaiting_review',
@@ -195,16 +216,13 @@ async function performIntegration(
       status: 'rejected',
       message: 'Maximum feedback attempts reached',
     });
-    return null;
+    throw new Error('Maximum feedback attempts reached');
   }
 
   return { branchName, attemptCount, claudeSessionId: sessionId };
 }
 
-async function runClaudeIntegration(
-  input: RepositoryIntegrationInput,
-  repoPath: string
-) {
+async function runClaudeIntegration(input: RepositoryIntegrationInput, repoPath: string) {
   await updateIntegrationStatus({
     integrationId: input.integrationId,
     status: 'integrating',
@@ -219,8 +237,7 @@ async function runClaudeIntegration(
 
   // Check if Claude Code made any changes
   const hasChanges =
-    (claudeResult.changes.modifiedFiles?.length ?? 0) > 0 ||
-    (claudeResult.changes.addedFiles?.length ?? 0) > 0;
+    (claudeResult.changes.modifiedFiles?.length ?? 0) > 0 || (claudeResult.changes.addedFiles?.length ?? 0) > 0;
 
   if (!hasChanges) {
     await updateIntegrationStatus({
@@ -241,7 +258,7 @@ async function createReviewPullRequest(
   branchName: string,
   attemptCount: number,
   reviewDecision: ReviewDecision | undefined,
-  forkInfo: ForkResult
+  forkInfo: ForkResult,
 ) {
   // Create staging branch
   await updateIntegrationStatus({
@@ -280,16 +297,14 @@ async function createReviewPullRequest(
   });
 }
 
-async function waitForReview(input: RepositoryIntegrationInput): Promise<ReviewDecision | null> {
-  let reviewDecision: ReviewDecision | undefined;
-  
-  // Set up a fresh signal handler for this review
-  setHandler(reviewChangesSignal, (decision: ReviewDecision) => {
-    reviewDecision = decision;
-  });
+async function waitForReview(
+  input: RepositoryIntegrationInput,
+  getReviewDecision: () => ReviewDecision | undefined,
+): Promise<ReviewDecision | null> {
+  console.log('[Workflow] Waiting for review signal...');
 
   // Wait for review signal (max 7 days)
-  const received = await condition(() => reviewDecision !== undefined, '7 days');
+  const received = await condition(() => getReviewDecision() !== undefined, '7 days');
 
   if (!received) {
     await updateIntegrationStatus({
@@ -300,7 +315,9 @@ async function waitForReview(input: RepositoryIntegrationInput): Promise<ReviewD
     return null;
   }
 
-  return reviewDecision!;
+  const decision = getReviewDecision()!;
+  console.log('[Workflow] Review decision received:', decision);
+  return decision;
 }
 
 async function createFinalPullRequest(
@@ -308,7 +325,7 @@ async function createFinalPullRequest(
   forkInfo: ForkResult,
   branchName: string,
   attemptCount: number,
-  sessionId?: string
+  sessionId?: string,
 ) {
   await updateIntegrationStatus({
     integrationId: input.integrationId,
@@ -321,7 +338,7 @@ async function createFinalPullRequest(
     repo: input.repoName,
     head: `${forkInfo.forkOwner}:${branchName}`,
     base: 'main',
-    title: 'Add Helicone observability integration',
+    title: '🚀 Add Helicone observability for LLM monitoring',
     body: formatFinalPRBody(attemptCount, sessionId),
   });
 
@@ -335,10 +352,7 @@ async function createFinalPullRequest(
 
 // Helper functions
 
-function formatReviewPRBody(
-  input: RepositoryIntegrationInput,
-  claudeResult: any
-): string {
+function formatReviewPRBody(input: RepositoryIntegrationInput, claudeResult: any): string {
   return `## 🔍 Review Required
 
 This PR adds Helicone observability to track and monitor LLM usage.
@@ -361,24 +375,44 @@ ${claudeResult.changesSummary}
 }
 
 function formatFinalPRBody(attemptCount: number, sessionId?: string): string {
-  let body = `## Summary
+  let body = `## 🚀 Add Helicone Observability for LLM Monitoring
 
-This PR adds Helicone observability to track and monitor LLM usage.
+This PR integrates [Helicone](https://helicone.ai) to provide comprehensive observability for your LLM API calls.
 
-`;
+### 🎯 What is Helicone?
 
-  if (sessionId) {
-    body += `Session ID: ${sessionId}
+Helicone is a proxy-based observability platform that provides:
+- **Real-time monitoring** of all LLM API calls
+- **Cost tracking** and usage analytics
+- **Latency metrics** and performance insights
+- **Error tracking** and debugging tools
+- **Custom tagging** and filtering capabilities
+- **Zero latency overhead** (adds <10ms)
 
-`;
-  }
+### 💡 Benefits for Your Application
 
-  body += `## Changes
+1. **Cost Control**: Track exactly how much you're spending on LLM APIs
+2. **Performance Monitoring**: Identify slow requests and optimize accordingly
+3. **Error Detection**: Catch and debug API failures quickly
+4. **Usage Analytics**: Understand which features consume the most tokens
+5. **Compliance**: Maintain audit logs of all LLM interactions
+
+### 🔧 How It Works
+
+This integration routes your existing LLM API calls through Helicone's proxy endpoints. No new dependencies are added - just configuration changes to your existing LLM clients.
+
+### 📊 Next Steps
+
+1. Set your \`HELICONE_API_KEY\` environment variable
+2. Visit your [Helicone Dashboard](https://helicone.ai/dashboard) to view metrics
+3. Set up alerts for cost thresholds or error rates
 
 `;
 
   if (attemptCount > 1) {
-    body += `This integration was refined through ${attemptCount} iterations based on review feedback.
+    body += `### 🔄 Review Process
+
+This integration was refined through ${attemptCount} iterations based on review feedback.
 
 `;
   }
