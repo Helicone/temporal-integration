@@ -81,10 +81,10 @@ export async function repositoryIntegrationWorkflow(input: RepositoryIntegration
       return;
     }
 
-    const { branchName, attemptCount, claudeSessionId } = integrationResult;
+    const { branchName, attemptCount, claudeSessionId, suggestedPRTitle } = integrationResult;
 
     // Step 3: Create final pull request to original repo
-    await createFinalPullRequest(input, forkInfo, branchName, attemptCount, claudeSessionId);
+    await createFinalPullRequest(input, forkInfo, branchName, attemptCount, claudeSessionId, suggestedPRTitle);
   } catch (error) {
     await updateIntegrationStatus({
       integrationId: input.integrationId,
@@ -129,7 +129,7 @@ async function performIntegration(
   forkInfo: ForkResult,
   getReviewDecision: () => ReviewDecision | undefined,
   resetReviewDecision: () => void,
-): Promise<{ branchName: string; attemptCount: number; claudeSessionId?: string } | null> {
+): Promise<{ branchName: string; attemptCount: number; claudeSessionId?: string; suggestedPRTitle?: string } | null> {
   // Step 1: Initial integration
   const claudeResult = await runClaudeIntegration(input, repoPath);
 
@@ -219,7 +219,7 @@ async function performIntegration(
     throw new Error('Maximum feedback attempts reached');
   }
 
-  return { branchName, attemptCount, claudeSessionId: sessionId };
+  return { branchName, attemptCount, claudeSessionId: sessionId, suggestedPRTitle: claudeResult.suggestedPRTitle };
 }
 
 async function runClaudeIntegration(input: RepositoryIntegrationInput, repoPath: string) {
@@ -285,7 +285,7 @@ async function createReviewPullRequest(
     repo: forkInfo.forkName,
     head: branchName,
     base: forkInfo.defaultBranch,
-    title: `[REVIEW] Add Helicone observability integration`,
+    title: `[REVIEW] ${claudeResult.suggestedPRTitle || 'Add Helicone observability integration'}`,
     body: formatReviewPRBody(input, claudeResult),
   });
 
@@ -326,6 +326,7 @@ async function createFinalPullRequest(
   branchName: string,
   attemptCount: number,
   sessionId?: string,
+  suggestedPRTitle?: string,
 ) {
   await updateIntegrationStatus({
     integrationId: input.integrationId,
@@ -338,7 +339,7 @@ async function createFinalPullRequest(
     repo: input.repoName,
     head: `${forkInfo.forkOwner}:${branchName}`,
     base: 'main',
-    title: '🚀 Add Helicone observability for LLM monitoring',
+    title: suggestedPRTitle || 'Add Helicone observability integration',
     body: formatFinalPRBody(attemptCount, sessionId),
   });
 
@@ -357,17 +358,28 @@ function formatReviewPRBody(input: RepositoryIntegrationInput, claudeResult: any
 
 This PR adds Helicone observability to track and monitor LLM usage.
 
+### Claude Code Summary
+
+<details>
+<summary>Click to see what Claude Code did</summary>
+
 ${claudeResult.summary}
 
-## Changes
+</details>
+
+## Changes Made
 
 ${claudeResult.changesSummary}
 
 ## Next Steps
 
 1. Review the changes in this PR
-2. If approved, run: \`npm run review ${input.integrationId} approve\`
-3. If changes needed, run: \`npm run review ${input.integrationId} reject "feedback here"\`
+2. Use the **Temporal UI** to send a review signal:
+   - Go to your workflow in Temporal UI
+   - Click "Send Signal" 
+   - Signal Type: \`reviewChanges\`
+   - For approval: \`{"approved": true}\`
+   - For changes: \`{"approved": false, "feedback": "your feedback here"}\`
 
 ---
 

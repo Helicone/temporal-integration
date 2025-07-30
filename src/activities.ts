@@ -161,6 +161,27 @@ export async function runClaudeCode(
     // Create a formatted changes summary
     const changesSummary = formatChangesSummary(modifiedFiles, addedFiles);
 
+    // Try to extract commit message if Claude Code made one
+    let suggestedPRTitle = 'Add Helicone observability integration';
+    try {
+      // First check if there are uncommitted changes
+      const { stdout: statusCheck } = await execAsync('git status --porcelain', { cwd: repoPath });
+      
+      if (!statusCheck.trim()) {
+        // No uncommitted changes, so Claude Code must have committed
+        const { stdout: lastCommit } = await execAsync('git log -1 --pretty=format:%s', { cwd: repoPath });
+        if (lastCommit) {
+          console.log('Found Claude Code commit:', lastCommit);
+          suggestedPRTitle = lastCommit.trim();
+        }
+      } else {
+        console.log('Claude Code did not commit changes');
+      }
+    } catch (e) {
+      console.log('Error checking for commit:', e);
+      // Couldn't get commit message, use default
+    }
+
     return {
       success: true,
       changes: {
@@ -170,6 +191,7 @@ export async function runClaudeCode(
       summary: summary.trim() || 'Successfully integrated Helicone observability into the project',
       changesSummary,
       sessionId: claudeSessionId,
+      suggestedPRTitle,
     };
   } catch (error) {
     console.error('Error running Claude Code:', error);
@@ -309,28 +331,46 @@ export async function createStagingBranch(input: z.infer<typeof CreateStagingBra
       stdio: 'inherit',
     });
 
-    // Check if there are any changes
+    // Check if Claude Code already made a commit
     const { stdout: statusOutput } = await execAsync('git status --porcelain', { cwd: repoPath });
-    console.log('Git status:', statusOutput || 'No changes detected');
+    console.log('Git status:', statusOutput || 'No uncommitted changes');
 
+    let hasCommit = false;
+    
     if (!statusOutput.trim()) {
-      throw new GitOperationError('No changes to commit');
+      // No uncommitted changes - check if Claude made a commit
+      try {
+        const { stdout: lastCommit } = await execAsync('git log -1 --pretty=format:%s', { cwd: repoPath });
+        if (lastCommit && lastCommit.toLowerCase().includes('helicone')) {
+          console.log('Claude Code already created commit:', lastCommit);
+          hasCommit = true;
+        }
+      } catch (e) {
+        // No commits yet
+      }
     }
 
-    // Stage all changes
-    execSync(`cd ${repoPath} && git add -A`, {
-      stdio: 'inherit',
-    });
+    if (!hasCommit && !statusOutput.trim()) {
+      throw new GitOperationError('No changes to commit');
+    }
 
     // Create and checkout new branch
     execSync(`cd ${repoPath} && git checkout -b ${branchName}`, {
       stdio: 'inherit',
     });
 
-    // Commit changes (skip hooks that might block)
-    execSync(`cd ${repoPath} && git commit -m "Add Helicone integration" --no-verify`, {
-      stdio: 'inherit',
-    });
+    // Only commit if Claude Code didn't already
+    if (!hasCommit && statusOutput.trim()) {
+      // Stage all changes
+      execSync(`cd ${repoPath} && git add -A`, {
+        stdio: 'inherit',
+      });
+      
+      // Claude Code didn't commit, so we'll do a basic one
+      execSync(`cd ${repoPath} && git commit -m "Add Helicone integration" --no-verify`, {
+        stdio: 'inherit',
+      });
+    }
 
     // Push to remote
     execSync(`cd ${repoPath} && git push origin ${branchName}`, {
