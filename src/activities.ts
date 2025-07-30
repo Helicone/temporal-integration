@@ -97,6 +97,26 @@ export async function cloneRepository(input: z.infer<typeof CloneRepositoryInput
       stdio: 'inherit',
     });
 
+    // Configure git user for commits (required in container environment)
+    execSync('git config user.email "noreply@helicone.ai"', {
+      cwd: tempDir,
+      stdio: 'inherit',
+    });
+    execSync('git config user.name "Helicone Integration Bot"', {
+      cwd: tempDir,
+      stdio: 'inherit',
+    });
+
+    // Update remote URL to include GitHub token for push authentication
+    const githubToken = process.env.GITHUB_TOKEN;
+    if (githubToken) {
+      const authenticatedUrl = repoUrl.replace('https://github.com/', `https://${githubToken}@github.com/`);
+      execSync(`git remote set-url origin ${authenticatedUrl}`, {
+        cwd: tempDir,
+        stdio: 'inherit',
+      });
+    }
+
     return { repoPath: tempDir };
   } catch (error) {
     throw new GitOperationError(`Failed to clone repository: ${getErrorMessage(error)}`, error as Error);
@@ -343,9 +363,17 @@ export async function createStagingBranch(input: z.infer<typeof CreateStagingBra
 
   try {
     // Ensure we're on the default branch
-    execSync(`cd ${repoPath} && git checkout main || git checkout master`, {
-      stdio: 'inherit',
-    });
+    try {
+      execSync('git checkout main', {
+        cwd: repoPath,
+        stdio: 'inherit',
+      });
+    } catch {
+      execSync('git checkout master', {
+        cwd: repoPath,
+        stdio: 'inherit',
+      });
+    }
 
     // Check if Claude Code already made a commit
     const { stdout: statusOutput } = await execAsync('git status --porcelain', { cwd: repoPath });
@@ -371,25 +399,29 @@ export async function createStagingBranch(input: z.infer<typeof CreateStagingBra
     }
 
     // Create and checkout new branch
-    execSync(`cd ${repoPath} && git checkout -b ${branchName}`, {
+    execSync(`git checkout -b ${branchName}`, {
+      cwd: repoPath,
       stdio: 'inherit',
     });
 
     // Only commit if Claude Code didn't already
     if (!hasCommit && statusOutput.trim()) {
       // Stage all changes
-      execSync(`cd ${repoPath} && git add -A`, {
+      execSync('git add -A', {
+        cwd: repoPath,
         stdio: 'inherit',
       });
       
       // Claude Code didn't commit, so we'll do a basic one
-      execSync(`cd ${repoPath} && git commit -m "Add Helicone integration" --no-verify`, {
+      execSync('git commit -m "Add Helicone integration" --no-verify', {
+        cwd: repoPath,
         stdio: 'inherit',
       });
     }
 
     // Push to remote
-    execSync(`cd ${repoPath} && git push origin ${branchName}`, {
+    execSync(`git push origin ${branchName}`, {
+      cwd: repoPath,
       stdio: 'inherit',
     });
   } catch (error) {
@@ -398,7 +430,8 @@ export async function createStagingBranch(input: z.infer<typeof CreateStagingBra
   }
 
   // Get the compare URL
-  const remoteUrl = execSync(`cd ${repoPath} && git remote get-url origin`, {
+  const remoteUrl = execSync('git remote get-url origin', {
+    cwd: repoPath,
     encoding: 'utf-8',
   }).trim();
 

@@ -87,12 +87,46 @@ fly secrets set TEMPORAL_API_KEY=xxx
 
 ### Starting an Integration Workflow
 
-```bash
-# For production
-npm run workflow -- https://github.com/some/llm-project
+There are three ways to start a workflow:
 
-# For development
-npm run workflow:dev -- https://github.com/some/llm-project
+#### 1. From Temporal Cloud UI
+
+Navigate to your Temporal Cloud namespace and use the UI to start a workflow:
+
+- **Workflow Type**: `repositoryIntegrationWorkflow`
+- **Task Queue**: `helicone-integration`
+- **Workflow ID**: `integration-<unique-id>` (or leave blank for auto-generated)
+- **Input** (must be wrapped in an array):
+```json
+[
+  {
+    "repoUrl": "https://github.com/owner/repo",
+    "repoOwner": "owner",
+    "repoName": "repo",
+    "integrationId": "unique-id-123"
+  }
+]
+```
+- **Encoding**: `json/plain`
+
+#### 2. From Command Line (Local)
+
+```bash
+# Set environment variables for Temporal Cloud connection
+export NODE_ENV=production
+export TEMPORAL_ADDRESS="your-namespace.tmprl.cloud:7233"
+export TEMPORAL_NAMESPACE="your-namespace"
+export TEMPORAL_API_KEY="your-api-key"
+
+# Run the client
+npm run workflow -- https://github.com/owner/repo
+```
+
+#### 3. From Development Environment
+
+```bash
+# For local Temporal server
+npm run workflow:dev -- https://github.com/owner/repo
 ```
 
 ### Reviewing Integration Results
